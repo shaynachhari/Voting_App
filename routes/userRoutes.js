@@ -1,14 +1,15 @@
 const express = require('express');
 const router = express.Router();
-const User = require('./../models/user');
+const User = require('../models/user');
 const {jwtAuthMiddleware, generateToken} = require('./../jwt');
+const { sendMail } = require('./../mailer');
+const crypto = require('crypto');
 
-// POST route to add a person
+
+// POST route Signup_api
 router.post('/signup', async (req, res) =>{
     try{
-        const data = req.body      // Assuming the request body contains the User data
-
-        // Check if there is already an admin user
+        const data = req.body     
         const adminUser = await User.findOne({ role: 'admin' });
         if (data.role === 'admin' && adminUser) {
             return res.status(400).json({ error: 'Admin user already exists' });
@@ -25,7 +26,6 @@ router.post('/signup', async (req, res) =>{
             return res.status(400).json({ error: 'User with the same Aadhar Card Number already exists' });
         }
 
-        // Create a new User document using the Mongoose model
         const newUser = new User(data);
 
         // Save the new user to the database
@@ -49,7 +49,6 @@ router.post('/signup', async (req, res) =>{
 // Login Route
 router.post('/login', async(req, res) => {
     try{
-        // Extract aadharCardNumber and password from request body
         const {aadharCardNumber, password} = req.body;
 
         // Check if aadharCardNumber or password is missing
@@ -57,7 +56,6 @@ router.post('/login', async(req, res) => {
             return res.status(400).json({ error: 'Aadhar Card Number and password are required' });
         }
 
-        // Find the user by aadharCardNumber
         const user = await User.findOne({aadharCardNumber: aadharCardNumber});
 
         // If user does not exist or password does not match, return error
@@ -71,7 +69,6 @@ router.post('/login', async(req, res) => {
         }
         const token = generateToken(payload);
 
-        // resturn token as response
         res.json({token})
     }catch(err){
         console.error(err);
@@ -92,17 +89,16 @@ router.get('/profile', jwtAuthMiddleware, async (req, res) => {
     }
 })
 
-router.put('/profile/password', jwtAuthMiddleware, async (req, res) => {
+router.put('/profile/changePassword', jwtAuthMiddleware, async (req, res) => {
     try {
-        const userId = req.user.id; // Extract the id from the token
-        const { currentPassword, newPassword } = req.body; // Extract current and new passwords from request body
+        const userId = req.user.id; 
+        const { currentPassword, newPassword } = req.body; 
 
         // Check if currentPassword and newPassword are present in the request body
         if (!currentPassword || !newPassword) {
             return res.status(400).json({ error: 'Both currentPassword and newPassword are required' });
         }
 
-        // Find the user by userID
         const user = await User.findById(userId);
 
         // If user does not exist or password does not match, return error
@@ -110,7 +106,6 @@ router.put('/profile/password', jwtAuthMiddleware, async (req, res) => {
             return res.status(401).json({ error: 'Invalid current password' });
         }
 
-        // Update the user's password
         user.password = newPassword;
         await user.save();
 
@@ -122,4 +117,82 @@ router.put('/profile/password', jwtAuthMiddleware, async (req, res) => {
     }
 });
 
+
+router.post('/profile/sendOtp', async (req, res) => {
+    try {
+        const { email } = req.body;
+        if (!email) {
+            return res.status(400).json({ error: 'Email is required' });
+        }
+
+        const user = await User.findOne({ email });
+        if (!user) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+
+        // Generate an OTP
+        const otp = crypto.randomInt(100000, 999999).toString();
+        console.log(`Generated OTP: ${otp}`);
+
+        // Save OTP and expiration to user document
+        user.otp = otp;
+        user.otpExpires = Date.now() + 10 * 60 * 1000;  // OTP expires in 10 minutes
+        await user.save();
+        console.log(`Saved OTP: ${otp} with expiration: ${user.otpExpires}`);
+
+        // Define mail options
+        const mailOptions = {
+            to: user.email,
+            from: process.env.GMAIL_USER,
+            subject: 'Your OTP Code',
+            text: `Your OTP code is ${otp}. It will expire in 10 minutes.`,
+        };
+
+        // Send mail
+        await sendMail(mailOptions);
+
+        res.status(200).json({ message: 'OTP sent to email' });
+
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: 'Internal Server Error' });
+    }
+});
+
+router.post('/profile/resetPassword', async (req, res) => {
+    try {
+        const { email, otp, newPassword } = req.body;
+
+        if (!email || !otp || !newPassword) {
+            return res.status(400).json({ error: 'Email, OTP, and new password are required' });
+        }
+
+        const user = await User.findOne({ email });
+        // console.log('Retrieved User:', user);
+
+        if (!user) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+
+        console.log(`Stored OTP: ${user.otp}, Provided OTP: ${otp}`);
+        // console.log(`OTP Expiration Time: ${user.otpExpires}, Current Time: ${Date.now()}`);
+
+        // Check if OTP is valid and not expired
+        if (user.otp !== otp || user.otpExpires < Date.now()) {
+            return res.status(400).json({ error: 'Invalid or expired OTP' });
+        }
+
+        // Reset the password
+        user.password = newPassword;
+        user.otp = undefined; // Clear the OTP
+        user.otpExpires = undefined; // Clear the OTP expiration
+        await user.save();
+
+        res.status(200).json({ message: 'Password reset successful' });
+
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: 'Internal Server Error' });
+    }
+});
 module.exports = router;

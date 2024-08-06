@@ -13,7 +13,9 @@ const userSchema = new mongoose.Schema({
         required: true
     },
     email: {
-        type: String
+        type: String,
+        required: true,
+        unique: true
     },
     mobile: {
         type: String
@@ -39,6 +41,14 @@ const userSchema = new mongoose.Schema({
     isVoted: {
         type: Boolean,
         default: false
+    },
+    otp: {
+        type: String,
+        default: undefined
+    },
+    otpExpires: {
+        type: Date,
+        default: undefined
     }
 });
 
